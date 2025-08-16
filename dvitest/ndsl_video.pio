@@ -1,0 +1,129 @@
+;
+; Copyright (c) 2025 Konrad Beckmann
+;
+; SPDX-License-Identifier: GPL-3.0
+;
+
+.program ndsl_video
+
+; Video
+; Data is stable on Negedge of CLK
+; 0-5   = B
+; 6-11  = G
+; 20-25 = R
+; 26    = DCLK - Pixel clock
+; 27    = GSP  - Start of frame - goes low just before top left pixels start
+; 28    = SPL  - Start of row   - goes high and low 2 clk before active pixels start
+
+
+; ----------------------------------------------------------
+; Video data sampling
+; ----------------------------------------------------------
+
+
+
+
+public ndsl_video_start:
+.wrap_target
+
+    ; Wait for high GSP
+    wait 1 pin 27
+
+    ; Wait for low GSP (new frame starts soon)
+    wait 0 pin 27
+
+    ;;;;; A new frame is about to start
+
+    ;; Read rows
+
+loop_wait_spl:
+    ; Wait for high SPL
+    wait 1 pin 28
+
+    ; Wait for low SPL
+    wait 0 pin 28
+
+    ;; Wait for 0-1-0-1 then sample
+    wait 0 pin 26
+    wait 1 pin 26
+    wait 0 pin 26
+
+
+    ;; loop starts here. Sample 256 pixels on both edges, i.e. loop 128 times (32 * 4)
+    set y, 3
+loop_row_y:
+    set x, 31
+loop_row_x:
+
+    ; Wait for DCLK=1
+    wait 1 pin 26
+
+    ; Sample data. Read all 32 bits.
+    in pins, 32
+
+    ; Wait for DCLK=0
+    wait 0 pin 26
+
+    ; Sample data. Read all 32 bits.
+    in pins, 32
+
+    ; Inner loop
+    jmp x-- loop_row_x
+
+    ; Outer loop
+    jmp y-- loop_row_y
+
+    ; x and y == 0. Row has been completely read.
+
+    jmp loop_wait_spl
+
+    ;; When we have read a full frame, the DMA job is done and we can restart the PIO state machine from the IRQ handler and grab the next frame
+
+.wrap
+
+
+
+% c-sdk {
+
+void ndsl_video_program_init(PIO pio, uint sm, uint offset)
+{
+    // B + G
+    for (int i = 0; i <= 11; i++) {
+        pio_gpio_init(pio, i);
+    }
+
+    // R
+    for (int i = 20; i <= 25; i++) {
+        gpio_init(i);
+        gpio_set_dir(i, GPIO_IN);
+        //gpio_set_pulls(i, false, true);
+        pio_gpio_init(pio, i);
+    }
+
+    for (int i = 26; i <= 28; i++) {
+        gpio_init(i);
+        gpio_set_dir(i, GPIO_IN);
+        //gpio_set_pulls(i, false, true);
+        pio_gpio_init(pio, i);
+    }
+
+
+    pio_sm_config c = ndsl_video_program_get_default_config(offset);
+
+    // Double the FIFO depth
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+
+    // Enable auto-push
+    //sm_config_set_in_shift(&c, true, true, 32);
+    sm_config_set_in_shift(&c, false, true, 32);
+
+    // Start counting at gpio 0
+    sm_config_set_in_pins(&c, 0);
+
+    // JMP pin is unused as of now
+    // sm_config_set_jmp_pin(&c, 27);
+
+    pio_sm_init(pio, sm, offset, &c);
+}
+
+%}
