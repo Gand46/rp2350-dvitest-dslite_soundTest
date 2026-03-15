@@ -23,6 +23,7 @@
 #include "pico/multicore.h"
 #include "pico/sem.h"
 
+#include <stdbool.h>
 #include <string.h>
 
 #include "ndsl_video.pio.h"
@@ -55,6 +56,15 @@
 #define MODE_V_ACTIVE_LINES  480
 #define FB_HEIGHT            (MODE_V_ACTIVE_LINES / 2)
 #define DS_HEIGHT            192
+
+#define NDSL_TOP_SPLO_PIN     44
+#define NDSL_TOP_SPRO_PIN     40
+
+#define HDMI_AUDIO_CHANNELS                 2u
+#define HDMI_AUDIO_SAMPLE_RATE_HZ           48000u
+#define HDMI_AUDIO_BITS_PER_SAMPLE          16u
+#define HDMI_AUDIO_USE_INTERNAL_ADC         0u
+#define RP2350_INTERNAL_ADC_MAX_GPIO_PIN    29u
 
 #define MODE_H_TOTAL_PIXELS ( \
     MODE_H_FRONT_PORCH + MODE_H_SYNC_WIDTH + \
@@ -169,6 +179,40 @@ static uint v_scanline = 2;
 // During the vertical active period, we take two IRQs per scanline: one to
 // post the command list, and another to post the pixels.
 static bool vactive_cmdlist_posted = false;
+
+static bool ndsl_audio_validate_config(void) {
+    if (HDMI_AUDIO_CHANNELS != 2u) {
+        return false;
+    }
+
+    if (HDMI_AUDIO_BITS_PER_SAMPLE != 16u && HDMI_AUDIO_BITS_PER_SAMPLE != 24u) {
+        return false;
+    }
+
+    if (HDMI_AUDIO_SAMPLE_RATE_HZ != 32000u &&
+        HDMI_AUDIO_SAMPLE_RATE_HZ != 44100u &&
+        HDMI_AUDIO_SAMPLE_RATE_HZ != 48000u) {
+        return false;
+    }
+
+    if (HDMI_AUDIO_USE_INTERNAL_ADC &&
+        (NDSL_TOP_SPLO_PIN > RP2350_INTERNAL_ADC_MAX_GPIO_PIN ||
+         NDSL_TOP_SPRO_PIN > RP2350_INTERNAL_ADC_MAX_GPIO_PIN)) {
+        return false;
+    }
+
+    return true;
+}
+
+static void ndsl_audio_prepare_input_pins(void) {
+    gpio_init(NDSL_TOP_SPLO_PIN);
+    gpio_set_dir(NDSL_TOP_SPLO_PIN, GPIO_IN);
+    gpio_disable_pulls(NDSL_TOP_SPLO_PIN);
+
+    gpio_init(NDSL_TOP_SPRO_PIN);
+    gpio_set_dir(NDSL_TOP_SPRO_PIN, GPIO_IN);
+    gpio_disable_pulls(NDSL_TOP_SPRO_PIN);
+}
 
 void __scratch_x("") dma_irq0_handler() {
 
@@ -314,6 +358,16 @@ int main(void)
 
     const PIO pio = pio0;
     const uint sm_video = 0;
+
+    // Audio staging: validate the stereo capture parameters and prepare input
+    // pins so the next step can route samples into HDMI data islands.
+    if (!ndsl_audio_validate_config()) {
+        while (1) {
+            __wfi();
+        }
+    }
+    ndsl_audio_prepare_input_pins();
+
     
     // Video
     uint offset = pio_add_program(pio, &ndsl_video_program);

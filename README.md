@@ -10,10 +10,53 @@ It is currently in a ugly state and needs to be cleaned up - but it works. It ha
 
 My ambition was to support both Top and Bottom screens in the same vide output, but it requires some planning with regards to the pinout.
 
+## HDMI audio status
+
+La Nintendo DS Lite entrega audio **estéreo analógico** por `TOP_SPLO` (L) y `TOP_SPRO` (R), que son las señales que vamos a usar como fuente.
+
+Estado actual del firmware:
+
+- La salida que generamos hoy es TMDS compatible con DVI (video-only).
+- Aún no se están insertando data islands HDMI de audio.
+
+Para habilitar audio HDMI real con esa fuente estéreo analógica se necesita:
+
+1. Captura estéreo con ADC (interno si el pinout lo permite, o ADC externo dedicado).
+2. Buffering y re-muestreo estable para un reloj de audio fijo (p. ej. 48 kHz).
+3. Construcción de tramas IEC-60958 + paquetes HDMI de audio en data islands.
+4. Generación correcta de N/CTS (ACR) y validación en distintos sinks HDMI.
+
+Nota: `TOP_SPLO/TOP_SPRO` son analógicas, por lo que no se pueden “inyectar” directo a HDMI digital sin esa etapa de conversión/paquetizado.
+
+### Estado de validación en código (preparación HDMI audio)
+
+El firmware ya deja una base validada para no avanzar con una configuración inválida:
+
+- Verifica en arranque parámetros mínimos de audio HDMI (`2` canales, `16/24` bits, y `32/44.1/48 kHz`).
+- Deja los pines `TOP_SPLO/TOP_SPRO` en entrada sin pulls, listos para etapa de captura.
+- Si la configuración no cumple los criterios, se queda en espera (`__wfi`) para evitar arrancar en un estado inconsistente.
+
+Esto deja preparado el siguiente paso: conectar la ruta de muestreo (ADC interno/externo) y empaquetado IEC-60958/data-islands sin romper la salida de video existente.
 
 ## Building
 
 Ensure you have a properly installed [pico-sdk](https://github.com/raspberrypi/pico-sdk) and related tools.
+
+### Test environment setup
+
+Use the helper script so the build/test environment is consistent:
+
+```bash
+$ source scripts/setup_testing_env.sh /absolute/path/to/pico-sdk
+```
+
+Then run the project build test:
+
+```bash
+$ scripts/test_build.sh
+```
+
+Equivalent manual commands:
 
 ```
 $ cmake -S . -B build -G Ninja -DPICO_PLATFORM=rp2350
@@ -78,4 +121,3 @@ Simplified pinout for the RP2350:
 | BOTTOM\_LDR3 | BOTTOM Red bit 3 |  | 12 |
 | BOTTOM\_LDR4 | BOTTOM Red bit 4 |  | 13 |
 | BOTTOM\_LDR5 | BOTTOM Red bit 5 |  | 14 |
-
